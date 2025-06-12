@@ -17,7 +17,7 @@ Note that we don't combine the main with ray_trainer as ray_trainer is used by o
 
 from verl import DataProto
 import torch
-from verl.utils.reward_score import gsm8k, math, multiply, countdown
+from verl.utils.reward_score import gsm8k, math, multiply, countdown, api_tasks
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
 
@@ -30,6 +30,8 @@ def _select_rm_score_fn(data_source):
         return multiply.compute_score
     elif "countdown" in data_source:
         return countdown.compute_score
+    elif "api_tasks" in data_source:
+        return api_tasks.compute_score
     else:
         raise NotImplementedError
 
@@ -41,6 +43,7 @@ class RewardManager():
     def __init__(self, tokenizer, num_examine) -> None:
         self.tokenizer = tokenizer
         self.num_examine = num_examine  # the number of batches of decoded responses to print to the console
+        self.training_step = 0  # Track training progress for better logging
 
     def __call__(self, data: DataProto):
         """We will expand this function gradually based on the available datasets"""
@@ -52,6 +55,7 @@ class RewardManager():
         reward_tensor = torch.zeros_like(data.batch['responses'], dtype=torch.float32)
 
         already_print_data_sources = {}
+        self.training_step += 1
 
         for i in range(len(data)):
             data_item = data[i]  # DataProtoItem
@@ -83,9 +87,46 @@ class RewardManager():
             if data_source not in already_print_data_sources:
                 already_print_data_sources[data_source] = 0
 
+            # Enhanced logging for training progress
             if already_print_data_sources[data_source] < self.num_examine:
                 already_print_data_sources[data_source] += 1
-                print(sequences_str)
+                
+                # Extract just the prompt and response for cleaner logging
+                prompt_str = self.tokenizer.decode(valid_prompt_ids)
+                response_str = self.tokenizer.decode(valid_response_ids)
+                
+                print(f"\n" + "🚀"*50)
+                print(f"TRAINING STEP {self.training_step} - SAMPLE {i+1}")
+                print(f"DATA SOURCE: {data_source}")
+                print(f"REWARD SCORE: {score:.3f}")
+                print("🚀"*50)
+                
+                print(f"📝 QUESTION:")
+                if 'question' in ground_truth:
+                    print(f"   {ground_truth['question']}")
+                else:
+                    # Extract question from prompt
+                    if "User:" in prompt_str:
+                        question_part = prompt_str.split("User:")[-1].split("Assistant:")[0].strip()
+                        print(f"   {question_part}")
+                
+                print(f"\n✅ EXPECTED ANSWER:")
+                print(f"   {ground_truth.get('correct_answer', 'No expected answer')}")
+                
+                print(f"\n🤖 MODEL RESPONSE:")
+                print(f"   {response_str}")
+                
+                print(f"\n📊 EVALUATION:")
+                if score >= 1.0:
+                    print(f"   🎉 PERFECT! Score: {score:.3f}")
+                elif score >= 0.7:
+                    print(f"   👍 GOOD! Score: {score:.3f}")
+                elif score >= 0.1:
+                    print(f"   ⚠️  PARTIAL! Score: {score:.3f}")
+                else:
+                    print(f"   ❌ POOR! Score: {score:.3f}")
+                
+                print("🚀"*50 + "\n")
 
         return reward_tensor
 
